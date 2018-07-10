@@ -423,27 +423,48 @@ class Tagger(Pipe):
             return chain(self.model.tok2vec, flatten)
 
     def __call__(self, doc):
-        tags, tokvecs = self.predict([doc])
+        tags, tokvecs, c_scores = self.predict([doc])
         self.set_annotations([doc], tags, tensors=tokvecs)
-        return doc
+        return doc, c_scores
 
     def pipe(self, stream, batch_size=128, n_threads=-1):
         for docs in cytoolz.partition_all(batch_size, stream):
             docs = list(docs)
-            tag_ids, tokvecs = self.predict(docs)
+            tag_ids, tokvecs, _ = self.predict(docs)
             self.set_annotations(docs, tag_ids, tensors=tokvecs)
             yield from docs
+    
+    #== added ==
+    def confident_score(self, scores):
+        # compute the confident scores given a numpy array
+        # Input:
+        #   scores: [sent], where sent is a ndarray of shape
+        #           (# words in each sentence, class probabilities)
+        # Output;
+        #   c_scores: a list of confident scores for each word in the sentence
+        c_scores = []
+        for word_scores in scores[0]:
+            flat = word_scores.flatten()
+            flat.sort()
+            prob_max = flat[-1]
+            prob_2nd_max = flat[-2]
+            c_scores.append(prob_max/(prob_max + prob_2nd_max) )
+        return c_scores
+    #== added ==
 
     def predict(self, docs):
         tokvecs = self.model.tok2vec(docs)
         scores = self.model.softmax(tokvecs)
         guesses = []
+        #== added ==
+        c_scores = self.confident_score(scores)
+        #== added ==
         for doc_scores in scores:
             doc_guesses = doc_scores.argmax(axis=1)
             if not isinstance(doc_guesses, numpy.ndarray):
                 doc_guesses = doc_guesses.get()
             guesses.append(doc_guesses)
-        return guesses, tokvecs
+        return guesses, tokvecs, c_scores
 
     def set_annotations(self, docs, batch_tag_ids, tensors=None):
         if isinstance(docs, Doc):

@@ -13,6 +13,9 @@ cimport cython.parallel
 import cytoolz
 import numpy.random
 cimport numpy as np
+#== added ==
+from libcpp.list cimport list as cpplist
+#== added ==
 from cpython.ref cimport PyObject, Py_XDECREF
 from cpython.exc cimport PyErr_CheckSignals, PyErr_SetFromErrno
 from libc.math cimport exp
@@ -335,9 +338,11 @@ cdef class Parser:
             beam_density = self.cfg.get('beam_density', 0.0)
         cdef Beam beam
         if beam_width == 1:
-            states, tokvecs = self.parse_batch([doc])
+            #== modified ==
+            states, tokvecs, c_scores = self.parse_batch([doc])
+            #== modified ==
             self.set_annotations([doc], states, tensors=tokvecs)
-            return doc
+            return doc, c_scores
         else:
             beams, tokvecs = self.beam_parse([doc],
                                 beam_width=beam_width,
@@ -371,7 +376,7 @@ cdef class Parser:
             for subbatch in cytoolz.partition_all(8, by_length):
                 subbatch = list(subbatch)
                 if beam_width == 1:
-                    parse_states, tokvecs = self.parse_batch(subbatch)
+                    parse_states, tokvecs, _ = self.parse_batch(subbatch)
                     beams = []
                 else:
                     beams, tokvecs = self.beam_parse(subbatch,
@@ -424,15 +429,50 @@ cdef class Parser:
         cdef int nr_task = states.size()
         with nogil:
             for i in range(nr_task):
-                self._parseC(states[i],
-                    feat_weights, bias, hW, hb,
-                    nr_class, nr_hidden, nr_feat, nr_piece)
+                #self._parseC(states[i],
+                #    feat_weights, bias, hW, hb,
+                #    nr_class, nr_hidden, nr_feat, nr_piece)
+                #== added ==
+                scores_cpp = self._parseC(states[i],
+                         feat_weights, bias, hW, hb,
+                         nr_class, nr_hidden, nr_feat, nr_piece)
+                #== added ==
         PyErr_CheckSignals()
         tokvecs = self.model[0].ops.unflatten(tokvecs,
                                     [len(doc) for doc in docs])
-        return state_objs, tokvecs
+        #== added ==
+        scores = []
+        list_len = scores_cpp.size()
+        while not scores_cpp.empty():
+            scores.append([])
+            tmp = scores_cpp.front()
+            scores_cpp.pop_front()
+            for j in range(nr_class):
+                scores[-1].append(tmp[j])
+            free(tmp)
+        c_scores = self.confident_score(scores)
+        #== added ==
+        return state_objs, tokvecs, c_scores
 
-    cdef void _parseC(self, StateC* state,
+    #== added ==
+    def confident_score(self, scores):
+         # compute the confident scores given a nested list
+         # Input:
+         #   scores: [[p0, ...], [p0, ...], ...]
+         #           each sublist corresponds to the probabilities of the action
+         #           number of sublists corresponds to the number of actions we take
+         # Output:
+         #   c_scores: a list of confident scores for each action
+         c_scores = []
+         for act_scores in scores:
+             act_scores.sort()
+             prob_max = act_scores[-1]
+             prob_2nd_max = act_scores[-2]
+             c_scores.append(prob_max/(prob_max + prob_2nd_max))
+         return c_scores
+    #== added ==
+
+    cdef cpplist[float*] _parseC(self, StateC* state,
             const float* feat_weights, const float* bias,
             const float* hW, const float* hb,
             int nr_class, int nr_hidden, int nr_feat, int nr_piece) nogil:
@@ -445,7 +485,13 @@ cdef class Parser:
                 PyErr_SetFromErrno(MemoryError)
                 PyErr_CheckSignals()
         cdef float feature
+        #== added ==
+        cdef cpplist[float*] scores_list
+        #== added ==
         while not state.is_final():
+            #== added ==
+            tmp_scores = <float*>calloc(nr_class, sizeof(float))
+            #== added ==
             state.set_context_tokens(token_ids, nr_feat)
             memset(vectors, 0, nr_hidden * nr_piece * sizeof(float))
             memset(scores, 0, nr_class * sizeof(float))
@@ -468,6 +514,13 @@ cdef class Parser:
                 V += nr_piece
             for i in range(nr_class):
                 scores[i] += hb[i]
+                #== added ==
+                tmp_scores[i] = scores[i]
+                #== added ==
+
+            #== added ==
+            scores_list.push_back(tmp_scores)
+            #== added ==
             self.moves.set_valid(is_valid, state)
             guess = arg_max_if_valid(scores, is_valid, nr_class)
             action = self.moves.c[guess]
@@ -477,6 +530,10 @@ cdef class Parser:
         free(is_valid)
         free(vectors)
         free(scores)
+        #== added ==
+        return scores_list
+        #== added ==
+    
 
     def beam_parse(self, docs, int beam_width=3, float beam_density=0.001):
         cdef Beam beam

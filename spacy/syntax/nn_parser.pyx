@@ -3,6 +3,7 @@
 # cython: boundscheck=False
 # cython: profile=True
 # coding: utf-8
+# distutils: language = c++
 from __future__ import unicode_literals, print_function
 
 from collections import OrderedDict
@@ -15,6 +16,7 @@ import numpy.random
 cimport numpy as np
 #== added ==
 from libcpp.list cimport list as cpplist
+from libc.stdio cimport printf
 #== added ==
 from cpython.ref cimport PyObject, Py_XDECREF
 from cpython.exc cimport PyErr_CheckSignals, PyErr_SetFromErrno
@@ -55,6 +57,12 @@ DEBUG = False
 def set_debug(val):
     global DEBUG
     DEBUG = val
+
+#== added ==
+cdef struct SCORE:
+    cpplist[int] action_id
+    cpplist[float*] score
+#== added ==
 
 
 cdef class precompute_hiddens:
@@ -332,6 +340,9 @@ cdef class Parser:
 
         doc (Doc): The document to be processed.
         """
+        #== added ==
+        print(len(self.move_names))
+        #== added ==
         if beam_width is None:
             beam_width = self.cfg.get('beam_width', 1)
         if beam_density is None:
@@ -340,9 +351,10 @@ cdef class Parser:
         if beam_width == 1:
             #== modified ==
             states, tokvecs, c_scores = self.parse_batch([doc])
+            doc.add_score('parser', c_scores)
             #== modified ==
             self.set_annotations([doc], states, tensors=tokvecs)
-            return doc, c_scores
+            return doc
         else:
             beams, tokvecs = self.beam_parse([doc],
                                 beam_width=beam_width,
@@ -352,7 +364,10 @@ cdef class Parser:
             state = StateClass.borrow(<StateC*>beam.at(0))
             self.set_annotations([doc], [state], tensors=tokvecs)
             _cleanup(beam)
-            return output
+            #==added==
+            doc.add_score('parser', output)
+            #==added==
+            return doc
 
     def pipe(self, docs, int batch_size=256, int n_threads=2,
              beam_width=None, beam_density=None):
@@ -410,7 +425,7 @@ cdef class Parser:
         nr_dim = tokvecs.shape[1]
         nr_feat = self.nr_feature
         nr_piece = state2vec.nP
-
+        
         state_objs = self.moves.init_batch(docs)
         for stcls in state_objs:
             if not stcls.c.is_final():
@@ -442,19 +457,30 @@ cdef class Parser:
                                     [len(doc) for doc in docs])
         #== added ==
         scores = []
-        list_len = scores_cpp.size()
-        while not scores_cpp.empty():
+        guesses = []
+        while not scores_cpp.score.empty():
             scores.append([])
-            tmp = scores_cpp.front()
-            scores_cpp.pop_front()
+            tmp = scores_cpp.score.front()
+            scores_cpp.score.pop_front()
             for j in range(nr_class):
                 scores[-1].append(tmp[j])
             free(tmp)
-        c_scores = self.confident_score(scores)
+            action_id = scores_cpp.action_id.front()
+            scores_cpp.action_id.pop_front()
+            guesses.append(action_id)
+        scores = self.confident_score(scores)
+        c_scores = self.wrap_score(scores, guesses)
         #== added ==
         return state_objs, tokvecs, c_scores
 
     #== added ==
+    def wrap_score(self, scores, guesses):
+        action_name = self.move_names
+        c_scores = []
+        for score, guess in zip(scores, guesses):
+            c_scores.append( (action_name[guess], score) )
+        return c_scores
+
     def confident_score(self, scores):
          # compute the confident scores given a nested list
          # Input:
@@ -472,7 +498,7 @@ cdef class Parser:
          return c_scores
     #== added ==
 
-    cdef cpplist[float*] _parseC(self, StateC* state,
+    cdef SCORE _parseC(self, StateC* state,
             const float* feat_weights, const float* bias,
             const float* hW, const float* hb,
             int nr_class, int nr_hidden, int nr_feat, int nr_piece) nogil:
@@ -486,7 +512,10 @@ cdef class Parser:
                 PyErr_CheckSignals()
         cdef float feature
         #== added ==
+        cdef SCORE score_with_guess
         cdef cpplist[float*] scores_list
+        cdef cpplist[int] guess_list
+        cdef int guess_cpp
         #== added ==
         while not state.is_final():
             #== added ==
@@ -518,11 +547,14 @@ cdef class Parser:
                 tmp_scores[i] = scores[i]
                 #== added ==
 
-            #== added ==
-            scores_list.push_back(tmp_scores)
-            #== added ==
             self.moves.set_valid(is_valid, state)
             guess = arg_max_if_valid(scores, is_valid, nr_class)
+            #== added ==
+            scores_list.push_back(tmp_scores)
+            with gil:
+                guess_cpp = guess
+                guess_list.push_back(guess_cpp)
+            #== added ==
             action = self.moves.c[guess]
             action.do(state, action.label)
             state.push_hist(guess)
@@ -531,7 +563,10 @@ cdef class Parser:
         free(vectors)
         free(scores)
         #== added ==
-        return scores_list
+        with gil:
+            score_with_guess.action_id = guess_list
+        score_with_guess.score = scores_list
+        return score_with_guess
         #== added ==
     
 
@@ -583,6 +618,10 @@ cdef class Parser:
                 break
             vectors = state2vec(token_ids[:n_states])
             scores = vec2scores(vectors)
+            #== added ==
+            #print(len(scores), len(scores[0]), nr_class)
+            #print(scores[0])
+            #== added ==
             c_scores = <float*>scores.data
             for beam in todo:
                 for i in range(beam.size):

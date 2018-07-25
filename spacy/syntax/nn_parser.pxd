@@ -10,6 +10,12 @@ from ._state cimport StateC
 from libcpp.list cimport list as cpplist
 #== added ==
 
+#== added ==
+cdef struct SCORE:
+    cpplist[int] action_id
+    cpplist[float*] score
+#== added ==
+
 
 cdef class Parser:
     cdef readonly Vocab vocab
@@ -18,7 +24,7 @@ cdef class Parser:
     cdef readonly object cfg
     cdef public object _multitasks
 
-    cdef cpplist[float*] _parseC(self, StateC* state, 
+    cdef SCORE _parseC(self, StateC* state, 
             const float* feat_weights, const float* bias,
             const float* hW, const float* hb,
             int nr_class, int nr_hidden, int nr_feat, int nr_piece) nogil

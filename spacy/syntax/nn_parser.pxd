@@ -14,8 +14,9 @@ from libcpp.list cimport list as cpplist
 cdef struct SCORE:
     cpplist[int] action_id
     cpplist[float*] score
+    cpplist[int] stack_top_id
+    cpplist[int] buffer_first_id
 #== added ==
-
 
 cdef class Parser:
     cdef readonly Vocab vocab

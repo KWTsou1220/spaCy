@@ -62,6 +62,8 @@ def set_debug(val):
 cdef struct SCORE:
     cpplist[int] action_id
     cpplist[float*] score
+    cpplist[int] stack_top_id
+    cpplist[int] buffer_first_id
 #== added ==
 
 
@@ -340,9 +342,6 @@ cdef class Parser:
 
         doc (Doc): The document to be processed.
         """
-        #== added ==
-        print(len(self.move_names))
-        #== added ==
         if beam_width is None:
             beam_width = self.cfg.get('beam_width', 1)
         if beam_density is None:
@@ -455,9 +454,38 @@ cdef class Parser:
         PyErr_CheckSignals()
         tokvecs = self.model[0].ops.unflatten(tokvecs,
                                     [len(doc) for doc in docs])
+
         #== added ==
+        scores = {'scores':[], 'guesses':[], 'stacks':[], 'buffers':[]}
+        while not scores_cpp.score.empty():
+            scores['scores'].append([])
+            tmp = scores_cpp.score.front()
+            scores_cpp.score.pop_front()
+            for j in range(nr_class):
+                scores['scores'][-1].append(tmp[j])
+            free(tmp)
+            
+            action_id = scores_cpp.action_id.front()
+            scores_cpp.action_id.pop_front()
+            scores['guesses'].append(action_id)
+            
+            stack_id = scores_cpp.stack_top_id.front()
+            scores_cpp.stack_top_id.pop_front()
+            scores['stacks'].append(stack_id)
+
+            buffer_id = scores_cpp.buffer_first_id.front()
+            scores_cpp.buffer_first_id.pop_front()
+            scores['buffers'].append(buffer_id)
+        scores['scores'] = self.confident_score(scores['scores'])
+        c_scores = self.wrap_score(scores)
+        #== added ==
+
+        #== added ==
+        '''
         scores = []
         guesses = []
+        stacks = []
+        buffers = []
         while not scores_cpp.score.empty():
             scores.append([])
             tmp = scores_cpp.score.front()
@@ -470,16 +498,30 @@ cdef class Parser:
             guesses.append(action_id)
         scores = self.confident_score(scores)
         c_scores = self.wrap_score(scores, guesses)
+        '''
         #== added ==
         return state_objs, tokvecs, c_scores
 
     #== added ==
+    def wrap_score(self, scores_dict):
+        action_name = self.move_names
+        c_scores = []
+        scores = scores_dict['scores']
+        guesses = scores_dict['guesses']
+        stacks = scores_dict['stacks']
+        buffers = scores_dict['buffers']
+
+        for score, guess, stack, buffer_ in zip(scores, guesses, stacks, buffers):
+            c_scores.append( (action_name[guess], score, stack, buffer_) )
+        return c_scores
+    '''
     def wrap_score(self, scores, guesses):
         action_name = self.move_names
         c_scores = []
         for score, guess in zip(scores, guesses):
             c_scores.append( (action_name[guess], score) )
         return c_scores
+    '''
 
     def confident_score(self, scores):
          # compute the confident scores given a nested list
@@ -515,6 +557,8 @@ cdef class Parser:
         cdef SCORE score_with_guess
         cdef cpplist[float*] scores_list
         cdef cpplist[int] guess_list
+        cdef cpplist[int] stack_list
+        cdef cpplist[int] buffer_list
         cdef int guess_cpp
         #== added ==
         while not state.is_final():
@@ -554,10 +598,26 @@ cdef class Parser:
             with gil:
                 guess_cpp = guess
                 guess_list.push_back(guess_cpp)
+            stack_list.push_back(state.S(0))
+            buffer_list.push_back(state.B(0))
+            #== added ==
+
+
+            #== added ==
+            printf('Before:\n')
+            buffer_len = state.length
+            for i in range(buffer_len):
+                printf('%d ', state.B(i))
+            stack_len = buffer_len
+            printf('\n')
+            for i in range(stack_len):
+                printf('%d ', state.S(i))
+            printf('\n\n')
             #== added ==
             action = self.moves.c[guess]
             action.do(state, action.label)
             state.push_hist(guess)
+
         free(token_ids)
         free(is_valid)
         free(vectors)
@@ -565,6 +625,8 @@ cdef class Parser:
         #== added ==
         with gil:
             score_with_guess.action_id = guess_list
+            score_with_guess.stack_top_id = stack_list
+            score_with_guess.buffer_first_id = buffer_list
         score_with_guess.score = scores_list
         return score_with_guess
         #== added ==

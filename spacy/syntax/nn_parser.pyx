@@ -480,26 +480,6 @@ cdef class Parser:
         c_scores = self.wrap_score(scores)
         #== added ==
 
-        #== added ==
-        '''
-        scores = []
-        guesses = []
-        stacks = []
-        buffers = []
-        while not scores_cpp.score.empty():
-            scores.append([])
-            tmp = scores_cpp.score.front()
-            scores_cpp.score.pop_front()
-            for j in range(nr_class):
-                scores[-1].append(tmp[j])
-            free(tmp)
-            action_id = scores_cpp.action_id.front()
-            scores_cpp.action_id.pop_front()
-            guesses.append(action_id)
-        scores = self.confident_score(scores)
-        c_scores = self.wrap_score(scores, guesses)
-        '''
-        #== added ==
         return state_objs, tokvecs, c_scores
 
     #== added ==
@@ -514,14 +494,6 @@ cdef class Parser:
         for score, guess, stack, buffer_ in zip(scores, guesses, stacks, buffers):
             c_scores.append( (action_name[guess], score, stack, buffer_) )
         return c_scores
-    '''
-    def wrap_score(self, scores, guesses):
-        action_name = self.move_names
-        c_scores = []
-        for score, guess in zip(scores, guesses):
-            c_scores.append( (action_name[guess], score) )
-        return c_scores
-    '''
 
     def confident_score(self, scores):
          # compute the confident scores given a nested list
@@ -600,19 +572,6 @@ cdef class Parser:
                 guess_list.push_back(guess_cpp)
             stack_list.push_back(state.S(0))
             buffer_list.push_back(state.B(0))
-            #== added ==
-
-
-            #== added ==
-            printf('Before:\n')
-            buffer_len = state.length
-            for i in range(buffer_len):
-                printf('%d ', state.B(i))
-            stack_len = buffer_len
-            printf('\n')
-            for i in range(stack_len):
-                printf('%d ', state.S(i))
-            printf('\n\n')
             #== added ==
             action = self.moves.c[guess]
             action.do(state, action.label)

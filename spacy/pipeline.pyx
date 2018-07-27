@@ -425,7 +425,8 @@ class Tagger(Pipe):
     def __call__(self, doc):
         tags, tokvecs, c_scores = self.predict([doc])
         self.set_annotations([doc], tags, tensors=tokvecs)
-        return doc, c_scores
+        doc.add_score(self.name, c_scores)
+        return doc
 
     def pipe(self, stream, batch_size=128, n_threads=-1):
         for docs in cytoolz.partition_all(batch_size, stream):
@@ -434,7 +435,6 @@ class Tagger(Pipe):
             self.set_annotations(docs, tag_ids, tensors=tokvecs)
             yield from docs
     
-    #== added ==
     def confident_score(self, scores):
         # compute the confident scores given a numpy array
         # Input:
@@ -450,15 +450,12 @@ class Tagger(Pipe):
             prob_2nd_max = flat[-2]
             c_scores.append(prob_max/(prob_max + prob_2nd_max) )
         return c_scores
-    #== added ==
 
     def predict(self, docs):
         tokvecs = self.model.tok2vec(docs)
         scores = self.model.softmax(tokvecs)
         guesses = []
-        #== added ==
         c_scores = self.confident_score(scores)
-        #== added ==
         for doc_scores in scores:
             doc_guesses = doc_scores.argmax(axis=1)
             if not isinstance(doc_guesses, numpy.ndarray):

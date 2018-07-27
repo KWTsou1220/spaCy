@@ -48,9 +48,7 @@ cdef class Doc:
     cdef public dict user_hooks
     cdef public dict user_token_hooks
     cdef public dict user_span_hooks
-    #== added ==
     cdef public dict c_scores
-    #== added ==
 
     cdef public list _py_tokens
 

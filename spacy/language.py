@@ -344,26 +344,15 @@ class Language(object):
             raise ValueError(Errors.E088.format(length=len(text),
                                                 max_length=self.max_length))
         doc = self.make_doc(text)
-        #== added ==
-        #c_scores = []
-        #== added ==
         for name, proc in self.pipeline:
             if name in disable:
                 continue
             if not hasattr(proc, '__call__'):
                 raise ValueError(Errors.E003.format(component=type(proc), name=name))
-            #== added ==
-            if name=='tagger' or name=='parser' or name=='ner':
-                doc, c = proc(doc)
-                #c_scores.append(c)
-                doc.add_score(name, c)
-            else:
-                doc = proc(doc) 
-            #== added ==
-            #doc = proc(doc)
+            doc = proc(doc)
             if doc is None:
                 raise ValueError(Errors.E005.format(name=name))
-        return doc#, c_scores
+        return doc
 
     def disable_pipes(self, *names):
         """Disable one or more pipeline components. If used as a context

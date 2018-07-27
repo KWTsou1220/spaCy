@@ -180,14 +180,10 @@ cdef class Doc:
         if self.length == 0:
             self.is_tagged = True
             self.is_parsed = True
-        #== added ==
         self.c_scores = {}
-        #== added ==
 
-    #== added ==
     def add_score(self, key, c_scores):
         self.c_scores[key] = c_scores
-    #== added ==
 
 
     @property
